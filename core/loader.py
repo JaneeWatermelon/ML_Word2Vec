@@ -30,7 +30,8 @@ def load_texts_from_directory(
         directory_path, 
         extensions=None, 
         encoding='utf-8',
-        recursive=False
+        recursive=False,
+        n_max: int=-1,
     ):
     """
     Загружает текст из нескольких файлов в директории.
@@ -50,16 +51,23 @@ def load_texts_from_directory(
         extensions = ['.txt']
     
     texts = {}
+
+    count = 0
     
     if recursive:
         # Рекурсивный обход всех поддиректорий
         for root, dirs, files in os.walk(directory_path):
+            if n_max != -1 and count >= n_max:
+                break
             for filename in files:
+                if n_max != -1 and count >= n_max:
+                    break
                 if any(filename.endswith(ext) for ext in extensions):
                     file_path = os.path.join(root, filename)
                     try:
                         text = load_text_from_file(file_path, encoding)
                         texts[file_path] = text
+                        count += 1
                     except Exception as e:
                         print(f"Ошибка при чтении файла {file_path}: {e}")
     else:
@@ -71,11 +79,14 @@ def load_texts_from_directory(
             return texts
             
         for filename in files:
+            if n_max != -1 and count >= n_max:
+                break
             file_path = os.path.join(directory_path, filename)
             if os.path.isfile(file_path) and any(filename.endswith(ext) for ext in extensions):
                 try:
                     text = load_text_from_file(file_path, encoding)
                     texts[filename] = text
+                    count += 1
                 except Exception as e:
                     print(f"Ошибка при чтении файла {file_path}: {e}")
     
