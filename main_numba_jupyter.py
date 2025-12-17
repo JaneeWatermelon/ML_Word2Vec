@@ -1,3 +1,5 @@
+from collections import Counter
+import re
 from numba import jit, prange
 import os
 import time
@@ -5,10 +7,81 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
-from core.base import text_preprocessor
-from core.grad_descent import grad_descent_neg_sampling
+from nltk import WordPunctTokenizer
 from core.loader import load_texts_from_directory
 from core.vars import TEXT_ROOT, ASSETS_ROOT, UNK_VAL
+
+@jit(nopython=True)
+def grad_descent_neg_sampling(
+        v_i: int, 
+        u_i: int, 
+        v_voc: np.ndarray, 
+        u_voc: np.ndarray, 
+        alpha: float, 
+        k_neg_samples: np.array,
+        dist_koef: float,
+    ):
+    v_c = v_voc[v_i]
+    u_c = u_voc[u_i]
+
+    pos_score = np.dot(u_c, v_c)
+    sigma_pos = 1 / (1 + np.exp(-pos_score))
+
+    neg_scores = np.dot(u_voc[k_neg_samples], v_c)
+    sigma_neg = 1 / (1 + np.exp(-neg_scores))
+
+    loss_v_c = (sigma_pos - 1) * u_c + (sigma_neg[:, np.newaxis] * u_voc[k_neg_samples]).sum(axis=0)
+    loss_u_c = (sigma_pos - 1) * v_c
+    loss_u_k = np.outer(sigma_neg, v_c)
+
+    v_voc[v_i] -= alpha*dist_koef*loss_v_c
+    u_voc[u_i] -= alpha*dist_koef*loss_u_c
+    u_voc[k_neg_samples] -= alpha*dist_koef*loss_u_k
+
+    epsilon = 1e-10
+
+    curr_loss = -np.log(sigma_pos + epsilon) - np.log(1 - sigma_neg + epsilon).sum(axis=0)
+
+    return curr_loss
+
+def text_preprocessor(texts: list[list[str]], min_freq: int=5) -> tuple[list[list[str]], dict[str, int]]:
+    tokenizer = WordPunctTokenizer()
+
+    tokens_counts = Counter()
+    total_tokens = 0
+    vocabulary = {}
+
+    tokens = []
+
+    for i in range(len(texts)):
+        text = texts[i]
+
+        text = re.sub(r'[.,!?;:"\'()\[\]{}<>«»„“”\-–—/\\|@#$%^&*_+=~`]', ' ', text)
+        text = re.sub(r'[ \t]+', ' ', text)  # Множественные пробелы/табы -> один пробел
+        text = re.sub(r'\n[ \t]+\n', '\n\n', text)  # Убираем пробелы между переносами
+        texts[i] = text
+
+    for i in range(len(texts)):
+        rows = texts[i].split("\n")
+        for row in rows:
+            if len(row.strip()) == 0:
+                continue
+            words = tokenizer.tokenize(row.lower())
+            tokens_counts.update(words)
+            total_tokens += len(words)
+            tokens.append(words)
+
+    idx = 0
+    for word, count in tokens_counts.most_common():
+        if count >= min_freq and word not in vocabulary:
+            vocabulary[word] = idx
+            idx += 1
+        else:
+            break
+
+    vocabulary[UNK_VAL] = idx
+
+    return tokens, vocabulary
 
 # JIT-совместимая версия основной логики
 @jit(nopython=True, parallel=True)
@@ -157,7 +230,6 @@ def main(
         if loss > 0:
             print(f"Epoch {epoch+1}: loss = {loss:.6f}")
     
-    # Анализ результатов (не JIT-часть)
     print("\nАнализ семантической близости слов...")
     analyze_embeddings(v_voc, voc)
 
@@ -175,12 +247,6 @@ def analyze_embeddings(embeddings, voc, top_n=10, show_per: int=250):
     Анализ эмбеддингов (не JIT-часть)
     """
     n_words = len(voc)
-
-    # for i in range(0, n_words, show_per):
-    #     emb_2d = embeddings[i:i+show_per]
-    #     voc_2d = voc[i:i+show_per]
-
-    #     show_scatter_plot(emb_2d=emb_2d, voc_2d=voc_2d)
 
     pca = PCA(n_components=2)
     emb_2d = pca.fit_transform(embeddings)
